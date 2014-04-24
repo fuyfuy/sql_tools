@@ -1,0 +1,233 @@
+
+
+/*******************************************************************************************************
+
+                    SQL SERVER - Initial Checks.
+
+********************************************************************************************************
+
+    Description: 
+    Purpose:  
+    Author: Ian Stirk.
+    Date: May 2013.
+    
+    Notes: 1. Some steps may fail if you dont have permissions.         
+  
+*********************************************************************************************************/
+
+-- Do not lock anything, and do not get held up by any locks. 
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+-- Get SQL Version  
+DECLARE @SQLVersion INT 
+SELECT @SQLVersion = CAST(SUBSTRING(@@VERSION, 22, 4) AS INT)  -- Example @@Version: Microsoft SQL Server 2008 (SP3) - 10.0.5768.0 (X64) 
+
+-- This routine needs SQL Server 2005 or higher to run.
+IF @SQLVersion < 2005 
+BEGIN
+    RAISERROR('This routine needs SQL Server 2005 or higher to run. Routine has exited', 16,1)
+    RETURN
+END
+
+
+-- Step counter value, used to separate pieces of outout. 
+DECLARE @StepCounter AS INT
+SET @StepCounter = 0
+    
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Show datetime of run.                                                   */
+/* Notes: 1. xxxxx                                                                  */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'DateTime of run' 
+
+SELECT CONVERT(VARCHAR(33), GetDate(), 109) AS RunDateTime
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Show the version of SQL Server.                                         */
+/* Notes: 1. Running the expected version of SQL Server?                            */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'SQL Server version' 
+
+SELECT @@VERSION 
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Get property info about server instance.                                */
+/* Notes: 1. IsIntegratedSecurityOnly: 1 = windows only                             */
+/*        2. ProductLevel - contains RTM or SP level. Is SP the correct one?!       */
+/*        3. ProductVersion - major.minor.build                                     */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'Property info about server instance' 
+
+SELECT SERVERPROPERTY('ServerName') AS [ServerName]
+    ,SERVERPROPERTY('InstanceName') AS [InstanceName]
+    ,SERVERPROPERTY('MachineName') AS [MachineName]
+    ,SERVERPROPERTY('Edition') AS [Edition]
+    ,SERVERPROPERTY('ProductVersion') AS [ProductVersion]
+    ,SERVERPROPERTY('ProductLevel') AS [ProductLevel]
+    ,SERVERPROPERTY('IsIntegratedSecurityOnly') AS [IsIntegratedSecurityOnly]
+    ,SERVERPROPERTY('IsClustered') AS [IsClustered]
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Get OS information.                                                     */
+/* Notes: 1. CPU/Memory/last reboot time useful.                                    */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'OS information' 
+
+SELECT cpu_count AS [Logical CPUs]
+, cpu_count / hyperthread_ratio AS [Physical CPUs]
+, CAST(physical_memory_kb / 1024.0 /1024.0 AS DECIMAL(28,2)) AS [Memory (GB)]
+, DATEADD(ss, -(ms_ticks / 1000), GetDate()) AS [Start DateTime]
+--  , sqlserver_start_time AS [Start DateTime]  -- In 2008+
+ FROM sys.dm_os_sys_info
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Show SQL Server configuration info.                                     */
+/* Notes: 1. priority boost - should be off (0)                                     */
+/*        2. cost threshold for parallelism (evaluate with MAXDOP)                  */
+/*        3. max degree of parallelism (1 or 8?)                                    */
+/*        4. max server memory (MB) - evaluate in context of server memory          */
+/*        5. clr enabled - generally disable, unless needed                         */
+/*        6. optimize for ad hoc workloads - often recommended to have on.          */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'Configuration - specifics' 
+
+SELECT name, description, value_in_use 
+FROM sys.configurations 
+WHERE NAME IN(
+  'clr enabled'
+, 'max degree of parallelism'   
+, 'cost threshold for parallelism'  
+, 'max server memory (MB)'          -- Set appropriately
+, 'optimize for ad hoc workloads'   -- should be 1.
+, 'priority boost'                  -- should be 0
+)
+ORDER BY name
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Identify what is causing the waits.                                     */
+/* Notes: 1. Check Tom Davidson's 2005 article to decode WAIT Types.                */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' +  'Most common waits' 
+
+;WITH Waits AS
+(SELECT wait_type, wait_time_ms / 1000. AS wait_time_s,
+100. * wait_time_ms / SUM(wait_time_ms) OVER() AS pct,
+ROW_NUMBER() OVER(ORDER BY wait_time_ms DESC) AS rn
+FROM sys.dm_os_wait_stats
+WHERE wait_type NOT IN ('CLR_SEMAPHORE','LAZYWRITER_SLEEP','RESOURCE_QUEUE','SLEEP_TASK'
+,'SLEEP_SYSTEMTASK','SQLTRACE_BUFFER_FLUSH','WAITFOR', 'LOGMGR_QUEUE','CHECKPOINT_QUEUE'
+,'REQUEST_FOR_DEADLOCK_SEARCH','XE_TIMER_EVENT','BROKER_TO_FLUSH','BROKER_TASK_STOP','CLR_MANUAL_EVENT'
+,'CLR_AUTO_EVENT','DISPATCHER_QUEUE_SEMAPHORE', 'FT_IFTS_SCHEDULER_IDLE_WAIT'
+,'XE_DISPATCHER_WAIT', 'XE_DISPATCHER_JOIN', 'SQLTRACE_INCREMENTAL_FLUSH_SLEEP','ONDEMAND_TASK_QUEUE'))
+
+SELECT W1.wait_type, 
+CAST(W1.wait_time_s AS DECIMAL(12, 2)) AS wait_time_s,
+CAST(W1.pct AS DECIMAL(12, 2)) AS pct,
+CAST(SUM(W2.pct) AS DECIMAL(12, 2)) AS running_pct
+FROM Waits AS W1
+INNER JOIN Waits AS W2
+ON W2.rn <= W1.rn
+GROUP BY W1.rn, W1.wait_type, W1.wait_time_s, W1.pct
+HAVING SUM(W2.pct) - W1.pct < 99; -- percentage threshold
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Signal Waits - CPU pressure.                                            */
+/* Notes: 1. How much time is spent swapping threads - above 20% is bad             */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' +  'Signal Waits - CPU pressure' 
+
+-- Signal Waits for instance
+SELECT CAST(100.0 * SUM(signal_wait_time_ms) / SUM (wait_time_ms) AS NUMERIC(20,2)) AS [%signal (cpu) waits],
+CAST(100.0 * SUM(wait_time_ms - signal_wait_time_ms) / SUM (wait_time_ms) AS NUMERIC(20,2)) AS [%resource waits]
+FROM sys.dm_os_wait_stats WITH (NOLOCK) OPTION (RECOMPILE);
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Show SQL Server database info.                                          */
+/* Notes: 1. Check compatibility level                                              */
+/*        2. is_read_committed_snapshot_on  (1 is good for concurrency)             */
+/*        3. recovery_model (want simple on non-prod boxes. Bulk_logged for prod)   */
+/*        4. page_verify - want CHECKSUM                                            */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'sys.databases' 
+
+SELECT name, compatibility_level, recovery_model_desc, page_verify_option_desc, is_read_committed_snapshot_on
+FROM sys.databases ORDER BY name
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: CPU utilization usage per object database.                              */
+/* Notes: 1. Is a single DB hogging CPU? Maybe needs a separate server              */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'CPU usage by database' 
+
+-- Get CPU utilization by database
+;WITH DB_CPU_Stats
+AS
+(SELECT DatabaseID, DB_Name(DatabaseID) AS [DatabaseName], 
+ SUM(total_worker_time) AS [CPU_Time_Ms]
+ FROM sys.dm_exec_query_stats AS qs
+ CROSS APPLY (SELECT CONVERT(int, value) AS [DatabaseID] 
+              FROM sys.dm_exec_plan_attributes(qs.plan_handle)
+              WHERE attribute = N'dbid') AS F_DB
+ GROUP BY DatabaseID)
+SELECT ROW_NUMBER() OVER(ORDER BY [CPU_Time_Ms] DESC) AS [row_num],
+       DatabaseName, [CPU_Time_Ms], 
+       CAST([CPU_Time_Ms] * 1.0 / SUM([CPU_Time_Ms]) 
+       OVER() * 100.0 AS DECIMAL(5, 2)) AS [CPUPercent]
+FROM DB_CPU_Stats
+WHERE DatabaseID > 4 -- system databases
+AND DatabaseID <> 32767 -- ResourceDB
+ORDER BY [CPUPercent] DESC OPTION (RECOMPILE);
+
+
+/************************************************************************************/
+/*                                                                                  */
+/* Purpose: Memory usage per database.                                              */
+/* Notes: 1. Is a single DB hogging memory? Maybe needs a separate server           */
+/*                                                                                  */
+/************************************************************************************/
+SET @StepCounter = @StepCounter + 1
+SELECT 'Step ' + CAST(@StepCounter AS VARCHAR(10)) + ': ' + 'Memory usage by database' 
+
+SELECT 
+    ISNULL(DB_NAME(database_id), 'ResourceDb') AS DatabaseName
+    , CAST(COUNT(row_count) * 8.0 / (1024.0) AS DECIMAL(28,2))  AS [Size (MB)] 
+    , CAST(COUNT(row_count) * 8.0 / (1024.0) / 1024.0 AS DECIMAL(28,2)) AS [Size (GB)] 
+FROM sys.dm_os_buffer_descriptors
+GROUP BY database_id
+ORDER BY [Size (MB)] DESC  

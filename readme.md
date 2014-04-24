@@ -1,0 +1,1 @@
+Cool (and free!) SQL server related scripts written and shared by SQL server experts
