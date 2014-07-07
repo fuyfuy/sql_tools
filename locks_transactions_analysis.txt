@@ -1,0 +1,33 @@
+--better/newer sp_lock
+select * from sys.dm_tran_locks
+
+--locks per SPID; only recourse_type OBJECT is shown. Modify "where" clause to get what you want.
+SELECT request_session_id AS session_id,
+    request_owner_id AS transaction_id,
+    DB_NAME(resource_database_id) AS DatabaseName,
+    OBJECT_SCHEMA_NAME(resource_associated_entity_id,
+            resource_database_id) AS SchemaName,
+    OBJECT_NAME(resource_associated_entity_id,
+            resource_database_id) AS ObjectName,
+    request_mode, request_type, request_status,
+    COUNT_BIG(1) AS lock_count
+FROM sys.dm_tran_locks
+WHERE resource_type = 'OBJECT'
+GROUP BY request_session_id, request_owner_id,
+    resource_database_id, resource_associated_entity_id,
+    request_mode, request_type, request_status
+
+
+--transcations per session
+SELECT *
+FROM sys.dm_exec_sessions sessions
+JOIN sys.dm_tran_session_transactions trans
+    ON sessions.session_id = trans.session_id
+
+	
+-- find all suspended transactions (modify as needed)
+
+SELECT session_id ,status ,blocking_session_id, 
+	wait_type ,wait_time ,wait_resource, transaction_id 
+FROM sys.dm_exec_requests 
+WHERE status = N'suspended';

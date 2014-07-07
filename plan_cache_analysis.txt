@@ -15,11 +15,15 @@ go
 
 select * from sys.dm_os_memory_cache_counters order by pages_kb desc
 
--- plan_handle and sql_handle 
+--sql_handle 
 
-SELECT st.text, qs. sql_handle, qs.plan_handle
+SELECT st.*, qs. sql_handle, qs.plan_handle
 FROM sys.dm_exec_query_stats qs
 CROSS APPLY sys.dm_exec_sql_text(sql_handle) st; 
+
+-- get sql test from plan_handle or sql_handle:
+
+SELECT * from sys.dm_exec_sql_text(plan_handle|sql_handle)
 
 -- shows most used adhoc plans; change (or omit) the objtype to get what you need
 

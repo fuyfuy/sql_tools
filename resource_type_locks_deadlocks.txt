@@ -1,0 +1,24 @@
+--deadlock or locking resource_type decyphering
+
+select * from sys.dm_tran_locks
+
+--resource type PAGE
+
+DBCC traceon (3604) --to output dbcc page to SSMS console
+
+select db_name(<dbid>)
+use <dbname>
+
+
+dbcc page(<dbid>, 1, 96859) 		-- example page info from sys.dm_tran_locks
+select object_name(<object_id>) 		-- object_id from Metadata: ObjectId field of dbcc page
+
+-- resource type KEY or RID: get resource_associated_entity_id from sys.dm_tran_locks
+
+SELECT 
+o.name AS TableName, 
+i.name AS IndexName,
+SCHEMA_NAME(o.schema_id) AS SchemaName
+FROM sys.partitions p JOIN sys.objects o ON p.OBJECT_ID = o.OBJECT_ID 
+JOIN sys.indexes i ON p.OBJECT_ID = i.OBJECT_ID  AND p.index_id = i.index_id 
+WHERE p.hobt_id = <resource_associated_entity_id>
